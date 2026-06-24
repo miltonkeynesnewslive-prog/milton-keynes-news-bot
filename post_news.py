@@ -3,6 +3,7 @@ import time
 import feedparser
 import requests
 import smtplib
+import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -92,7 +93,39 @@ def generate_with_ai(article):
         print(f"⚠️ AI generation failed: {e}")
         return {"headline": article["title"][:60], "caption": article["title"]}
 
-# === STEP 3: Create an image ===
+# === STEP 3: Create an image and upload to ImgBB ===
+def upload_to_imgbb(image_path):
+    """Upload image to ImgBB and return URL."""
+    try:
+        # ImgBB API key (free, sign up at https://api.imgbb.com/)
+        IMGBB_API_KEY = os.environ.get("IMGBB_API_KEY")
+        
+        if not IMGBB_API_KEY:
+            print("⚠️ No ImgBB API key. Using placeholder URL.")
+            return None
+        
+        with open(image_path, "rb") as img_file:
+            files = {"image": img_file}
+            data = {"key": IMGBB_API_KEY}
+            response = requests.post("https://api.imgbb.com/1/upload", files=files, data=data, timeout=30)
+        
+        if response.status_code == 200:
+            result = response.json()
+            if result.get("success"):
+                image_url = result["data"]["url"]
+                print(f"✅ Image uploaded to ImgBB: {image_url}")
+                return image_url
+            else:
+                print(f"❌ ImgBB upload failed: {result}")
+                return None
+        else:
+            print(f"❌ ImgBB error: {response.text}")
+            return None
+    except Exception as e:
+        print(f"⚠️ ImgBB upload error: {e}")
+        return None
+
+# === STEP 4: Create image ===
 def create_image(headline):
     print("🖼️ Creating image with headline...")
     encoded_headline = requests.utils.quote(headline)
@@ -111,25 +144,28 @@ def create_image(headline):
         print(f"⚠️ Image download failed: {e}")
         return None
 
-# === STEP 4: Post to Instagram (UPDATED - File Upload Method) ===
-def post_to_instagram(image_path, caption):
+# === STEP 5: Post to Instagram (URL-based method) ===
+def post_to_instagram(image_url, caption):
     print("📸 Posting to Instagram...")
     if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_BUSINESS_ID:
         print("❌ Instagram credentials missing!")
         return False
+    
+    if not image_url:
+        print("❌ No image URL provided!")
+        return False
+    
     try:
-        # Upload the image as a binary file
+        # Step 1: Create media container with image_url
         upload_url = f"https://graph.facebook.com/v20.0/{INSTAGRAM_BUSINESS_ID}/media"
+        data = {
+            "access_token": INSTAGRAM_ACCESS_TOKEN,
+            "image_url": image_url,
+            "caption": caption
+        }
         
-        with open(image_path, "rb") as image_file:
-            files = {
-                'image': ('post_image.jpg', image_file, 'image/jpeg')
-            }
-            data = {
-                'access_token': INSTAGRAM_ACCESS_TOKEN,
-                'caption': caption
-            }
-            response = requests.post(upload_url, files=files, data=data)
+        print(f"📤 Uploading image URL: {image_url}")
+        response = requests.post(upload_url, data=data)
         
         if response.status_code != 200:
             print(f"❌ Upload failed: {response.text}")
@@ -139,12 +175,12 @@ def post_to_instagram(image_path, caption):
         creation_id = upload_data.get("id")
         
         if not creation_id:
-            print(f"❌ No creation ID in response: {upload_data}")
+            print(f"❌ No creation ID: {upload_data}")
             return False
             
-        print(f"✅ Image uploaded with ID: {creation_id}")
+        print(f"✅ Media container created with ID: {creation_id}")
         
-        # Publish the post
+        # Step 2: Publish the post
         publish_url = f"https://graph.facebook.com/v20.0/{INSTAGRAM_BUSINESS_ID}/media_publish"
         publish_response = requests.post(
             publish_url,
@@ -165,7 +201,7 @@ def post_to_instagram(image_path, caption):
         print(f"❌ Posting error: {e}")
         return False
 
-# === STEP 5: Send approval email ===
+# === STEP 6: Send approval email ===
 def send_approval_email(headline, caption, link):
     if not EMAIL_SENDER or not EMAIL_PASSWORD:
         print("❌ Email credentials missing. Skipping approval.")
@@ -205,7 +241,7 @@ def send_approval_email(headline, caption, link):
         print(f"❌ Failed to send email: {e}")
         return False
 
-# === STEP 6: Check if approval file exists in GitHub ===
+# === STEP 7: Check if approval file exists in GitHub ===
 def check_approval_in_github():
     """Check if approved.txt exists in the GitHub repository."""
     if not GITHUB_TOKEN or not GITHUB_REPO:
@@ -231,7 +267,7 @@ def check_approval_in_github():
         print(f"⚠️ GitHub check failed: {e}")
         return False
 
-# === STEP 7: Wait for approval ===
+# === STEP 8: Wait for approval ===
 def wait_for_approval():
     """Wait for approval file to appear in GitHub (up to 10 minutes)."""
     print("⏳ Waiting for approval...")
@@ -279,14 +315,25 @@ def main():
             print("❌ Could not send approval email. Exiting.")
             return
     
-    # Approved! Post to Instagram
+    # Approved! Create image and post
     print("✅ Approved! Publishing...")
     image_path = create_image(ai_content["headline"])
-    if image_path:
-        full_caption = f"{ai_content['caption']}\n\nRead more: {article['link']}"
-        post_to_instagram(image_path, full_caption)
-    else:
+    if not image_path:
         print("❌ Image creation failed.")
+        return
+    
+    # Upload to ImgBB and get URL
+    print("📤 Uploading image to ImgBB...")
+    image_url = upload_to_imgbb(image_path)
+    
+    if not image_url:
+        # Fallback: use the placeholder URL directly
+        encoded_headline = requests.utils.quote(ai_content["headline"])
+        image_url = f"https://placehold.co/1080x1080/cc0000/ffffff?text={encoded_headline}"
+        print(f"⚠️ Using fallback placeholder URL: {image_url}")
+    
+    full_caption = f"{ai_content['caption']}\n\nRead more: {article['link']}"
+    post_to_instagram(image_url, full_caption)
 
 if __name__ == "__main__":
     main()

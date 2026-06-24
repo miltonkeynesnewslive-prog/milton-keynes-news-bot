@@ -11,22 +11,22 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-      
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
-      
+
       - name: Install dependencies
         run: |
           pip install feedparser requests
-      
+
       - name: Run the news posting script
         env:
           INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
           INSTAGRAM_BUSINESS_ID: ${{ secrets.INSTAGRAM_BUSINESS_ID }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-            EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
         run: python post_news.py

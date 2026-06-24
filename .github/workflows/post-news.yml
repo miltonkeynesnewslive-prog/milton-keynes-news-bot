@@ -2,14 +2,12 @@ name: "Post Milton Keynes News"
 
 on:
   schedule:
-    # Runs every hour at minute 0
     - cron: "0 * * * *"
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   post-news:
     runs-on: ubuntu-latest
-    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4

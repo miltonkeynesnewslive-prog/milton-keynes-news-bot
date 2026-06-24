@@ -8,7 +8,7 @@ on:
       approve:
         description: 'Approve and post?'
         required: true
-        default: 'yes'
+        default: 'no'
         type: choice
         options:
           - yes
@@ -41,5 +41,5 @@ jobs:
           APPROVAL_TOKEN: ${{ secrets.APPROVAL_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-          RUN_APPROVAL: ${{ github.event.inputs.approve }}
+          APPROVE: ${{ github.event.inputs.approve }}
         run: python post_news.py

@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "0 * * * *"
   workflow_dispatch:
+    inputs:
+      approve:
+        description: 'Approve and post?'
+        required: true
+        default: 'yes'
+        type: choice
+        options:
+          - yes
+          - no
 
 jobs:
   post-news:
@@ -29,4 +38,8 @@ jobs:
           EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          APPROVAL_TOKEN: ${{ secrets.APPROVAL_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
+          RUN_APPROVAL: ${{ github.event.inputs.approve }}
         run: python post_news.py

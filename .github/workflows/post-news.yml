@@ -2,7 +2,7 @@ name: "Post Milton Keynes News"
 
 on:
   schedule:
-      - cron: "*/60 * * * *"  # Every 60 minutes
+    - cron: "*/60 * * * *"  # Every 60 minutes
   workflow_dispatch:
     inputs:
       approve:
@@ -39,6 +39,8 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
           APPROVAL_TOKEN: ${{ secrets.APPROVAL_TOKEN }}
+          HTML_CSS_API_KEY: ${{ secrets.HTML_CSS_API_KEY }}
+          HTML_CSS_USER_ID: ${{ secrets.HTML_CSS_USER_ID }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
           APPROVE: ${{ github.event.inputs.approve }}

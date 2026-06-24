@@ -2,7 +2,6 @@ import os
 import time
 import feedparser
 import requests
-import base64
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -112,24 +111,40 @@ def create_image(headline):
         print(f"⚠️ Image download failed: {e}")
         return None
 
-# === STEP 4: Post to Instagram ===
+# === STEP 4: Post to Instagram (UPDATED - File Upload Method) ===
 def post_to_instagram(image_path, caption):
     print("📸 Posting to Instagram...")
     if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_BUSINESS_ID:
         print("❌ Instagram credentials missing!")
         return False
     try:
+        # Upload the image as a binary file
         upload_url = f"https://graph.facebook.com/v20.0/{INSTAGRAM_BUSINESS_ID}/media"
-        with open(image_path, "rb") as img_file:
-            files = {"image": img_file}
-            data = {"access_token": INSTAGRAM_ACCESS_TOKEN}
-            response = requests.post(upload_url, data=data, files=files)
+        
+        with open(image_path, "rb") as image_file:
+            files = {
+                'image': ('post_image.jpg', image_file, 'image/jpeg')
+            }
+            data = {
+                'access_token': INSTAGRAM_ACCESS_TOKEN,
+                'caption': caption
+            }
+            response = requests.post(upload_url, files=files, data=data)
+        
         if response.status_code != 200:
             print(f"❌ Upload failed: {response.text}")
             return False
+        
         upload_data = response.json()
         creation_id = upload_data.get("id")
+        
+        if not creation_id:
+            print(f"❌ No creation ID in response: {upload_data}")
+            return False
+            
         print(f"✅ Image uploaded with ID: {creation_id}")
+        
+        # Publish the post
         publish_url = f"https://graph.facebook.com/v20.0/{INSTAGRAM_BUSINESS_ID}/media_publish"
         publish_response = requests.post(
             publish_url,
@@ -138,12 +153,14 @@ def post_to_instagram(image_path, caption):
                 "creation_id": creation_id
             }
         )
+        
         if publish_response.status_code == 200:
             print("✅ Post published successfully!")
             return True
         else:
             print(f"❌ Publish failed: {publish_response.text}")
             return False
+            
     except Exception as e:
         print(f"❌ Posting error: {e}")
         return False

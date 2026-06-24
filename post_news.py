@@ -1,11 +1,9 @@
 import os
-import sys
 import time
 import feedparser
 import requests
-import smtplib
 import base64
-import imaplib
+import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -20,10 +18,10 @@ EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 RSS_FEED_URL = "https://www.miltonkeynes.co.uk/rss"
 
 # === GITHUB CONFIGURATION ===
-GITHUB_TOKEN = os.environ.get("APPROVAL_TOKEN")  # Your secret
-GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY")  # Set by GitHub
-RUN_APPROVAL = os.environ.get("RUN_APPROVAL")  # workflow_dispatch input
+GITHUB_TOKEN = os.environ.get("APPROVAL_TOKEN")
+GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY")
 APPROVAL_FILE = "approved.txt"
+PIPEDREAM_URL = "https://eomj13e55tyupi0.m.pipedream.net"
 
 # === STEP 1: Fetch the latest news ===
 def fetch_latest_news():
@@ -156,6 +154,7 @@ def send_approval_email(headline, caption, link):
         print("❌ Email credentials missing. Skipping approval.")
         return False
 
+    approval_link = PIPEDREAM_URL
     body = f"""
     <html>
     <body>
@@ -164,9 +163,10 @@ def send_approval_email(headline, caption, link):
         <p><strong>Caption:</strong> {caption}</p>
         <p><strong>Link:</strong> <a href="{link}">{link}</a></p>
         <hr>
-        <p><strong>To approve and publish, reply to this email with "APPROVE" in the subject line.</strong></p>
-        <p>You have 10 minutes to approve.</p>
-        <p><small>Or manually run the workflow with 'approve: yes' from the Actions tab.</small></p>
+        <p><strong>Click the link below to approve and publish:</strong></p>
+        <p><a href="{approval_link}" style="display:inline-block;background:#cc0000;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">✅ Approve & Publish</a></p>
+        <p>This approval link will create a file in the repository and trigger the post.</p>
+        <p><small>You have 10 minutes to approve.</small></p>
     </body>
     </html>
     """
@@ -188,64 +188,71 @@ def send_approval_email(headline, caption, link):
         print(f"❌ Failed to send email: {e}")
         return False
 
-# === STEP 6: Check email for approval ===
-def check_email_approval():
-    """Check for a reply email with 'APPROVE' in the subject."""
-    if not EMAIL_SENDER or not EMAIL_PASSWORD:
-        return False
+# === STEP 6: Check if approval file exists in GitHub ===
+def check_approval_in_github():
+    """Check if approved.txt exists in the GitHub repository."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        print("⚠️ No GitHub token or repo. Checking local file only.")
+        return os.path.exists(APPROVAL_FILE)
+    
     try:
-        mail = imaplib.IMAP4_SSL('imap.gmail.com')
-        mail.login(EMAIL_SENDER, EMAIL_PASSWORD)
-        mail.select('inbox')
-        status, messages = mail.search(None, f'(FROM "{EMAIL_RECEIVER}" SUBJECT "APPROVE")')
-        if status == 'OK' and messages[0]:
-            print("✅ Approval found in email replies!")
-            mail.close()
-            mail.logout()
+        owner, repo = GITHUB_REPO.split('/')
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{APPROVAL_FILE}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json"
+        }
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            print("✅ Approval file found in GitHub!")
             return True
-        mail.close()
-        mail.logout()
-        return False
+        else:
+            print(f"⚠️ File not found: {response.status_code}")
+            return False
     except Exception as e:
-        print(f"⚠️ Email check failed: {e}")
+        print(f"⚠️ GitHub check failed: {e}")
         return False
 
 # === STEP 7: Wait for approval ===
 def wait_for_approval():
-    """Wait for approval via email reply (up to 10 minutes)."""
+    """Wait for approval file to appear in GitHub (up to 10 minutes)."""
     print("⏳ Waiting for approval...")
     print(f"📧 Check your inbox at: {EMAIL_RECEIVER}")
-    print("💡 Reply to the email with 'APPROVE' in the subject line.")
-
+    print("🔗 Click the approval link in the email.")
+    print(f"📂 Checking for file: {APPROVAL_FILE}")
+    
     for attempt in range(20):  # 10 minutes (20 * 30 seconds)
         time.sleep(30)
         print(f"   Waiting... {attempt+1}/20")
-        if check_email_approval():
+        if check_approval_in_github():
             return True
-
+    
     print("⏰ Approval timeout. Skipping post.")
     return False
 
 # === MAIN ===
 def main():
-    print("🚀 Starting Milton Keynes News Bot...")
+    print("🚀 Starting Milton Keynes News Bot with GitHub Approval...")
     print(f"⏰ Run at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-    # If approval was given via workflow_dispatch, skip waiting
-    if RUN_APPROVAL == "yes":
+    
+    # Check if approval was given via workflow_dispatch
+    if os.environ.get("APPROVE") == "yes":
         print("✅ Approval received via workflow input. Posting directly...")
     else:
-        print("ℹ️ No approval provided. Will wait for email reply or manual run.")
-
+        print("ℹ️ No approval provided. Will wait for email approval or manual run.")
+    
     article = fetch_latest_news()
     if not article:
         print("❌ No article found. Exiting.")
         return
-
+    
     ai_content = generate_with_ai(article)
-
+    print(f"📝 Headline: {ai_content['headline']}")
+    print(f"📝 Caption: {ai_content['caption'][:100]}...")
+    
     # If not pre-approved, send email and wait
-    if RUN_APPROVAL != "yes":
+    if os.environ.get("APPROVE") != "yes":
         if send_approval_email(ai_content["headline"], ai_content["caption"], article["link"]):
             print("📧 Approval email sent. Waiting for your response...")
             if not wait_for_approval():
@@ -254,7 +261,7 @@ def main():
         else:
             print("❌ Could not send approval email. Exiting.")
             return
-
+    
     # Approved! Post to Instagram
     print("✅ Approved! Publishing...")
     image_path = create_image(ai_content["headline"])

@@ -1,0 +1,31 @@
+name: "Post Milton Keynes News"
+
+on:
+  schedule:
+    # Runs every hour at minute 0
+    - cron: "0 * * * *"
+  workflow_dispatch:  # Manual trigger
+
+jobs:
+  post-news:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      
+      - name: Install dependencies
+        run: |
+          pip install feedparser requests
+      
+      - name: Run the news posting script
+        env:
+          INSTAGRAM_ACCESS_TOKEN: ${{ secrets.INSTAGRAM_ACCESS_TOKEN }}
+          INSTAGRAM_BUSINESS_ID: ${{ secrets.INSTAGRAM_BUSINESS_ID }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python post_news.py

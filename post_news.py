@@ -93,12 +93,39 @@ def get_image_credit(entry):
 
 
 # === STEP 1: Fetch the latest news ===
+def load_feed(url):
+    """Fetch a feed with a browser-style request, then parse it.
+
+    Some sites (e.g. police/gov) block feedparser's default request and return
+    a block page, which looks like an empty feed. Fetching with a real
+    User-Agent first avoids that. Falls back to direct parsing if needed.
+    """
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code == 200 and resp.content:
+            feed = feedparser.parse(resp.content)
+            if feed.entries:
+                return feed
+        else:
+            print(f"   ⚠️ HTTP {resp.status_code} from {url}")
+    except Exception as e:
+        print(f"   ⚠️ Fetch failed for {url}: {e}")
+
+    # Fallback: let feedparser fetch it directly.
+    return feedparser.parse(url)
+
+
 def fetch_latest_news():
     print("📰 Fetching latest news from all sources...")
     all_entries = []
     for url in RSS_FEEDS:
         try:
-            feed = feedparser.parse(url)
+            feed = load_feed(url)
             count = len(feed.entries)
             if count:
                 print(f"   ✅ {count} entries from {url}")

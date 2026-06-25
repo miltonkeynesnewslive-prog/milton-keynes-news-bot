@@ -16,7 +16,11 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 EMAIL_SENDER = os.environ.get("EMAIL_SENDER")
 EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
-RSS_FEED_URL = "https://www.miltonkeynes.co.uk/rss"
+RSS_FEEDS = [
+    "https://www.miltonkeynes.co.uk/news/rss",
+    "https://www.milton-keynes.gov.uk/news/rss.xml",
+    "https://www.thamesvalley.police.uk/news/thames-valley/news/GetNewsRss/",
+]
 
 # === IMAGE / BRANDING CONFIGURATION ===
 HTML_CSS_API_KEY = os.environ.get("HTML_CSS_API_KEY")
@@ -76,7 +80,7 @@ def get_article_image(entry):
 
 
 def get_image_credit(entry):
-    """Best-effort photo credit for the corner of the graphic."""
+    """Best-effort photo credit for the corner of the graphic (blank if none)."""
     try:
         credit = entry.get("media_credit")
         if isinstance(credit, list) and credit:
@@ -85,30 +89,47 @@ def get_image_credit(entry):
                 return f"Photo: {name}"
     except Exception:
         pass
-    return "Milton Keynes Citizen"
+    return ""
 
 
 # === STEP 1: Fetch the latest news ===
 def fetch_latest_news():
-    print("📰 Fetching latest news from Milton Keynes Citizen...")
-    try:
-        feed = feedparser.parse(RSS_FEED_URL)
-        if not feed.entries:
-            print("❌ No articles found.")
-            return None
-        latest = feed.entries[0]
-        print(f"✅ Found: {latest.title}")
-        return {
-            "title": latest.title,
-            "content": latest.get("summary", latest.get("description", "")),
-            "link": latest.link,
-            "published": latest.get("published", ""),
-            "image": get_article_image(latest),
-            "credit": get_image_credit(latest),
-        }
-    except Exception as e:
-        print(f"❌ Error fetching news: {e}")
+    print("📰 Fetching latest news from all sources...")
+    all_entries = []
+    for url in RSS_FEEDS:
+        try:
+            feed = feedparser.parse(url)
+            count = len(feed.entries)
+            if count:
+                print(f"   ✅ {count} entries from {url}")
+                all_entries.extend(feed.entries)
+            else:
+                print(f"   ⚠️ No entries from {url}")
+        except Exception as e:
+            print(f"   ❌ Error reading {url}: {e}")
+
+    if not all_entries:
+        print("❌ No articles found in any feed.")
         return None
+
+    def entry_time(entry):
+        t = entry.get("published_parsed") or entry.get("updated_parsed")
+        try:
+            return time.mktime(t) if t else 0
+        except Exception:
+            return 0
+
+    all_entries.sort(key=entry_time, reverse=True)
+    latest = all_entries[0]
+    print(f"✅ Newest across all feeds: {latest.get('title', 'Untitled')}")
+    return {
+        "title": latest.get("title", "Milton Keynes News"),
+        "content": latest.get("summary", latest.get("description", "")),
+        "link": latest.get("link", ""),
+        "published": latest.get("published", ""),
+        "image": get_article_image(latest),
+        "credit": get_image_credit(latest),
+    }
 
 
 # === STEP 2: Generate headline and caption with AI ===

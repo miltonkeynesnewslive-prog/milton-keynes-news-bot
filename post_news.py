@@ -194,6 +194,7 @@ def create_image(headline, image_url=None, credit=""):
 
     html = f"""
     <div class="card">
+      <div class="photo-blur" style="background-image:url('{bg}')"></div>
       <div class="photo" style="background-image:url('{bg}')"></div>
       <div class="overlay"></div>
       <div class="topbar">
@@ -211,7 +212,8 @@ def create_image(headline, image_url=None, credit=""):
     css = """
     * { margin:0; padding:0; box-sizing:border-box; font-family:'Oswald', sans-serif; }
     .card { position:relative; width:1080px; height:1080px; overflow:hidden; background:#111; }
-    .photo { position:absolute; top:0; left:0; right:0; bottom:0; background-size:cover; background-position:center; }
+    .photo-blur { position:absolute; top:0; left:0; right:0; bottom:0; background-size:cover; background-position:center; filter:blur(28px) brightness(0.55); transform:scale(1.12); }
+    .photo { position:absolute; top:0; left:0; right:0; bottom:0; background-size:contain; background-repeat:no-repeat; background-position:center; }
     .overlay { position:absolute; top:0; left:0; right:0; bottom:0;
       background:linear-gradient(to bottom, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0.60) 60%, rgba(0,0,0,0.97) 100%); }
     .topbar { position:absolute; top:42px; left:42px; }
@@ -360,11 +362,11 @@ def send_approval_email(headline, caption, link):
         return False
 
 
-# === STEP 6: Check approval in GitHub ===
-def check_approval_in_github():
+# === STEP 6: Approval helpers (single-use approved.txt) ===
+def get_approval_sha():
+    """Return the sha of approved.txt if it exists in the repo, else None."""
     if not GITHUB_TOKEN or not GITHUB_REPO:
-        return os.path.exists(APPROVAL_FILE)
-
+        return "local" if os.path.exists(APPROVAL_FILE) else None
     try:
         owner, repo = GITHUB_REPO.split('/')
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{APPROVAL_FILE}"
@@ -373,10 +375,48 @@ def check_approval_in_github():
             "Accept": "application/vnd.github+json",
         }
         response = requests.get(url, headers=headers)
-        return response.status_code == 200
+        if response.status_code == 200:
+            return response.json().get("sha")
+        return None
     except Exception as e:
         print(f"⚠️ GitHub check failed: {e}")
-        return False
+        return None
+
+
+def check_approval_in_github():
+    return get_approval_sha() is not None
+
+
+def clear_approval():
+    """Delete approved.txt so each approval can only ever be used once."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        if os.path.exists(APPROVAL_FILE):
+            try:
+                os.remove(APPROVAL_FILE)
+            except Exception:
+                pass
+        return
+    sha = get_approval_sha()
+    if not sha:
+        return  # nothing to clear
+    try:
+        owner, repo = GITHUB_REPO.split('/')
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{APPROVAL_FILE}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+        }
+        response = requests.delete(
+            url,
+            headers=headers,
+            json={"message": "Consume approval (auto-cleared by bot)", "sha": sha},
+        )
+        if response.status_code in (200, 201):
+            print("🧹 Cleared approved.txt — approval consumed.")
+        else:
+            print(f"⚠️ Could not clear approval ({response.status_code}): {response.text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Could not clear approval: {e}")
 
 
 # === STEP 7: Wait for approval ===
@@ -414,11 +454,15 @@ def main():
     print(f"📝 Headline: {ai_content['headline']}")
 
     if os.environ.get("APPROVE") != "yes":
+        # Remove any leftover approval so only a fresh click counts this run.
+        clear_approval()
         if send_approval_email(ai_content["headline"], ai_content["caption"], article["link"]):
             print("📧 Approval email sent. Waiting for your response...")
             if not wait_for_approval():
                 print("❌ Not approved. Skipping post.")
                 return
+            # Approval granted — consume it immediately so it can't be reused.
+            clear_approval()
         else:
             print("❌ Could not send approval email. Exiting.")
             return

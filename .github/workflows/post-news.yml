@@ -1,8 +1,6 @@
 name: "Post Milton Keynes News"
 
 on:
-  schedule:
-    - cron: "23 * * * *"   # hourly at :23, off the busy top-of-hour slot
   workflow_dispatch:
     inputs:
       approve:

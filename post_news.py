@@ -92,17 +92,18 @@ def generate_with_ai(article):
         print(f"⚠️ AI generation failed: {e}")
         return {"headline": article["title"][:60], "caption": article["title"]}
 
-# === STEP 3: Create image with placehold.co and logo text ===
+# === STEP 3: Create image with placehold.co ===
 def create_image(headline):
-    print("🖼️ Creating image with logo text...")
+    """Create a simple branded image with MK NEWS prefix."""
+    print("🖼️ Creating image with placehold.co...")
     
-    # Add "MK NEWS" as a logo prefix
+    # Add "MK NEWS" as a prefix to the headline
     formatted_text = f"MK NEWS | {headline}"
     encoded_text = requests.utils.quote(formatted_text)
     
-    # Use placehold.co with red background and white text
+    # Create the image URL
     image_url = f"https://placehold.co/1080x1080/cc0000/ffffff?text={encoded_text}"
-    print(f"✅ Image URL created: {image_url}")
+    print(f"✅ Image URL created")
     return image_url
 
 # === STEP 4: Post to Instagram ===
@@ -112,12 +113,8 @@ def post_to_instagram(image_url, caption):
         print("❌ Instagram credentials missing!")
         return False
     
-    if not image_url:
-        print("❌ No image URL provided!")
-        return False
-    
     try:
-        # Step 1: Create media container with image_url
+        # Step 1: Upload the image
         upload_url = f"https://graph.facebook.com/v20.0/{INSTAGRAM_BUSINESS_ID}/media"
         data = {
             "access_token": INSTAGRAM_ACCESS_TOKEN,
@@ -125,7 +122,7 @@ def post_to_instagram(image_url, caption):
             "caption": caption
         }
         
-        print(f"📤 Uploading image...")
+        print("📤 Uploading image...")
         response = requests.post(upload_url, data=data)
         
         if response.status_code != 200:
@@ -141,7 +138,12 @@ def post_to_instagram(image_url, caption):
             
         print(f"✅ Media container created with ID: {creation_id}")
         
-        # Step 2: Publish the post
+        # Step 2: Wait for Instagram to process the image
+        print("⏳ Waiting 10 seconds for Instagram to process the image...")
+        time.sleep(10)
+        
+        # Step 3: Publish the post
+        print("📤 Publishing...")
         publish_url = f"https://graph.facebook.com/v20.0/{INSTAGRAM_BUSINESS_ID}/media_publish"
         publish_response = requests.post(
             publish_url,
@@ -236,7 +238,7 @@ def wait_for_approval():
 
 # === MAIN ===
 def main():
-    print("🚀 Starting Milton Keynes News Bot with Branded Images...")
+    print("🚀 Starting Milton Keynes News Bot...")
     print(f"⏰ Run at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
     if os.environ.get("APPROVE") == "yes":

@@ -2,7 +2,7 @@ name: "Post Milton Keynes News"
 
 on:
   schedule:
-    - cron: "*/60 * * * *"  # Every 60 minutes
+    - cron: "23 * * * *"   # hourly at :23, off the busy top-of-hour slot
   workflow_dispatch:
     inputs:
       approve:
@@ -11,8 +11,8 @@ on:
         default: 'no'
         type: choice
         options:
-          - yes
-          - no
+          - 'yes'
+          - 'no'
 
 jobs:
   post-news:

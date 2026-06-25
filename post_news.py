@@ -1,8 +1,10 @@
 import os
+import re
 import time
 import feedparser
 import requests
 import smtplib
+from html import escape as html_escape
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
@@ -16,11 +18,75 @@ EMAIL_PASSWORD = os.environ.get("EMAIL_PASSWORD")
 EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 RSS_FEED_URL = "https://www.miltonkeynes.co.uk/rss"
 
+# === IMAGE / BRANDING CONFIGURATION ===
+HTML_CSS_API_KEY = os.environ.get("HTML_CSS_API_KEY")
+HTML_CSS_USER_ID = os.environ.get("HTML_CSS_USER_ID")
+# This logo file must be committed to the repo root so this raw URL works.
+LOGO_URL = "https://raw.githubusercontent.com/miltonkeynesnewslive-prog/milton-keynes-news-bot/main/MK%20News%20Logo.png"
+
 # === GITHUB CONFIGURATION ===
 GITHUB_TOKEN = os.environ.get("APPROVAL_TOKEN")
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY")
 APPROVAL_FILE = "approved.txt"
 PIPEDREAM_URL = "https://eomj13e55tyupi0.m.pipedream.net"
+
+
+# === HELPERS ===
+def strip_emojis(text):
+    """Remove emojis so the headline overlay renders cleanly (no boxes)."""
+    if not text:
+        return ""
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F000-\U0001FAFF"
+        "\U00002600-\U000027BF"
+        "\U0001F1E6-\U0001F1FF"
+        "\U00002190-\U000021FF"
+        "\U00002B00-\U00002BFF"
+        "\uFE0F"
+        "]+",
+        flags=re.UNICODE,
+    )
+    return emoji_pattern.sub("", text).strip()
+
+
+def get_article_image(entry):
+    """Pull the article's own photo URL from the RSS entry."""
+    try:
+        if getattr(entry, "media_content", None):
+            url = entry.media_content[0].get("url")
+            if url:
+                return url
+    except Exception:
+        pass
+    try:
+        if getattr(entry, "media_thumbnail", None):
+            url = entry.media_thumbnail[0].get("url")
+            if url:
+                return url
+    except Exception:
+        pass
+    for link in entry.get("links", []):
+        if link.get("rel") == "enclosure" and "image" in link.get("type", ""):
+            return link.get("href")
+    match = re.search(r'<img[^>]+src="([^"]+)"', entry.get("summary", ""))
+    if match:
+        return match.group(1)
+    return None
+
+
+def get_image_credit(entry):
+    """Best-effort photo credit for the corner of the graphic."""
+    try:
+        credit = entry.get("media_credit")
+        if isinstance(credit, list) and credit:
+            name = credit[0].get("content", "").strip()
+            if name:
+                return f"Photo: {name}"
+    except Exception:
+        pass
+    return "Milton Keynes Citizen"
+
 
 # === STEP 1: Fetch the latest news ===
 def fetch_latest_news():
@@ -36,11 +102,14 @@ def fetch_latest_news():
             "title": latest.title,
             "content": latest.get("summary", latest.get("description", "")),
             "link": latest.link,
-            "published": latest.get("published", "")
+            "published": latest.get("published", ""),
+            "image": get_article_image(latest),
+            "credit": get_image_credit(latest),
         }
     except Exception as e:
         print(f"❌ Error fetching news: {e}")
         return None
+
 
 # === STEP 2: Generate headline and caption with AI ===
 def generate_with_ai(article):
@@ -49,29 +118,29 @@ def generate_with_ai(article):
         print("⚠️ No OpenAI API key found. Using fallback text.")
         return {
             "headline": article["title"][:60],
-            "caption": f"{article['title']}\n\nRead more: {article['link']} #MiltonKeynesNews"
+            "caption": f"{article['title']}\n\nRead more: {article['link']} #MiltonKeynesNews",
         }
     try:
         response = requests.post(
             "https://api.openai.com/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
             },
             json={
                 "model": "gpt-4o-mini",
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are a social media assistant. Create a short headline (max 8 words) and an engaging Instagram caption (under 150 words) with emojis. Format your response as: HEADLINE: ... CAPTION: ..."
+                        "content": "You are a social media assistant. Create a short headline (max 8 words) and an engaging Instagram caption (under 150 words) with emojis. Format your response as: HEADLINE: ... CAPTION: ...",
                     },
                     {
                         "role": "user",
-                        "content": f"Create content for this news article:\nHeadline: {article['title']}\nContent: {article['content']}"
-                    }
-                ]
+                        "content": f"Create content for this news article:\nHeadline: {article['title']}\nContent: {article['content']}",
+                    },
+                ],
             },
-            timeout=30
+            timeout=30,
         )
         if response.status_code == 200:
             result = response.json()
@@ -92,19 +161,84 @@ def generate_with_ai(article):
         print(f"⚠️ AI generation failed: {e}")
         return {"headline": article["title"][:60], "caption": article["title"]}
 
-# === STEP 3: Create image with placehold.co ===
-def create_image(headline):
-    """Create a simple branded image with MK NEWS prefix."""
-    print("🖼️ Creating image with placehold.co...")
-    
-    # Add "MK NEWS" as a prefix to the headline
-    formatted_text = f"MK NEWS | {headline}"
-    encoded_text = requests.utils.quote(formatted_text)
-    
-    # Create the image URL
-    image_url = f"https://placehold.co/1080x1080/cc0000/ffffff?text={encoded_text}"
-    print(f"✅ Image URL created")
-    return image_url
+
+# === STEP 3: Create a branded news graphic ===
+def create_image(headline, image_url=None, credit=""):
+    """Build a branded news graphic (article photo + logo + headline) via htmlcsstoimage.com."""
+    print("🖼️ Creating branded image...")
+
+    clean_headline = strip_emojis(headline) or "Milton Keynes News"
+    # If the article had no photo, fall back to a dark branded background.
+    bg = image_url or "https://placehold.co/1080x1080/111111/111111.png"
+
+    html = f"""
+    <div class="card">
+      <div class="photo" style="background-image:url('{bg}')"></div>
+      <div class="overlay"></div>
+      <div class="topbar">
+        <div class="logo-badge"><img src="{LOGO_URL}" /></div>
+      </div>
+      <div class="bottom">
+        <div class="accent"></div>
+        <div class="headline">{html_escape(clean_headline)}</div>
+      </div>
+      <div class="credit">{html_escape(credit or "")}</div>
+      <div class="footer"><span>@miltonkeynes_news</span></div>
+    </div>
+    """
+
+    css = """
+    * { margin:0; padding:0; box-sizing:border-box; font-family:'Oswald', sans-serif; }
+    .card { position:relative; width:1080px; height:1080px; overflow:hidden; background:#111; }
+    .photo { position:absolute; top:0; left:0; right:0; bottom:0; background-size:cover; background-position:center; }
+    .overlay { position:absolute; top:0; left:0; right:0; bottom:0;
+      background:linear-gradient(to bottom, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0.55) 60%, rgba(0,0,0,0.93) 100%); }
+    .topbar { position:absolute; top:42px; left:42px; }
+    .logo-badge { background:#ffffff; border-radius:18px; padding:14px 22px; box-shadow:0 8px 22px rgba(0,0,0,0.35); }
+    .logo-badge img { height:62px; display:block; }
+    .bottom { position:absolute; left:54px; right:54px; bottom:108px; }
+    .accent { width:96px; height:11px; background:#cc0000; border-radius:6px; margin-bottom:26px; }
+    .headline { color:#ffffff; font-weight:700; font-size:70px; line-height:1.08; text-transform:uppercase;
+      text-shadow:0 3px 16px rgba(0,0,0,0.65);
+      display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
+    .credit { position:absolute; right:30px; bottom:80px; color:rgba(255,255,255,0.65); font-size:22px; font-weight:300; }
+    .footer { position:absolute; left:0; right:0; bottom:0; height:64px; background:#cc0000;
+      display:flex; align-items:center; padding:0 54px; }
+    .footer span { color:#ffffff; font-size:30px; font-weight:500; letter-spacing:1px; }
+    """
+
+    try:
+        if not HTML_CSS_API_KEY or not HTML_CSS_USER_ID:
+            raise ValueError("htmlcsstoimage credentials missing")
+        resp = requests.post(
+            "https://hcti.io/v1/image",
+            auth=(HTML_CSS_USER_ID, HTML_CSS_API_KEY),
+            data={
+                "html": html,
+                "css": css,
+                "google_fonts": "Oswald",
+                "selector": ".card",
+                "viewport_width": 1080,
+                "viewport_height": 1080,
+                "device_scale": 1,
+                "ms_delay": 600,
+            },
+            timeout=60,
+        )
+        if resp.status_code in (200, 201):
+            url = resp.json().get("url")
+            if url:
+                print(f"✅ Branded image created: {url}")
+                return url
+        print(f"⚠️ Image API error {resp.status_code}: {resp.text[:200]}")
+    except Exception as e:
+        print(f"⚠️ Image generation failed: {e}")
+
+    # Fallback: simple placeholder so the bot never fully breaks.
+    print("↩️ Falling back to placeholder image.")
+    encoded = requests.utils.quote(f"MK NEWS | {clean_headline}")
+    return f"https://placehold.co/1080x1080/cc0000/ffffff?text={encoded}"
+
 
 # === STEP 4: Post to Instagram ===
 def post_to_instagram(image_url, caption):
@@ -112,36 +246,36 @@ def post_to_instagram(image_url, caption):
     if not INSTAGRAM_ACCESS_TOKEN or not INSTAGRAM_BUSINESS_ID:
         print("❌ Instagram credentials missing!")
         return False
-    
+
     try:
         # Step 1: Upload the image
         upload_url = f"https://graph.facebook.com/v20.0/{INSTAGRAM_BUSINESS_ID}/media"
         data = {
             "access_token": INSTAGRAM_ACCESS_TOKEN,
             "image_url": image_url,
-            "caption": caption
+            "caption": caption,
         }
-        
+
         print("📤 Uploading image...")
         response = requests.post(upload_url, data=data)
-        
+
         if response.status_code != 200:
             print(f"❌ Upload failed: {response.text}")
             return False
-        
+
         upload_data = response.json()
         creation_id = upload_data.get("id")
-        
+
         if not creation_id:
             print(f"❌ No creation ID: {upload_data}")
             return False
-            
+
         print(f"✅ Media container created with ID: {creation_id}")
-        
+
         # Step 2: Wait for Instagram to process the image
         print("⏳ Waiting 10 seconds for Instagram to process the image...")
         time.sleep(10)
-        
+
         # Step 3: Publish the post
         print("📤 Publishing...")
         publish_url = f"https://graph.facebook.com/v20.0/{INSTAGRAM_BUSINESS_ID}/media_publish"
@@ -149,20 +283,21 @@ def post_to_instagram(image_url, caption):
             publish_url,
             data={
                 "access_token": INSTAGRAM_ACCESS_TOKEN,
-                "creation_id": creation_id
-            }
+                "creation_id": creation_id,
+            },
         )
-        
+
         if publish_response.status_code == 200:
             print("✅ Post published successfully!")
             return True
         else:
             print(f"❌ Publish failed: {publish_response.text}")
             return False
-            
+
     except Exception as e:
         print(f"❌ Posting error: {e}")
         return False
+
 
 # === STEP 5: Send approval email ===
 def send_approval_email(headline, caption, link):
@@ -203,17 +338,18 @@ def send_approval_email(headline, caption, link):
         print(f"❌ Failed to send email: {e}")
         return False
 
+
 # === STEP 6: Check approval in GitHub ===
 def check_approval_in_github():
     if not GITHUB_TOKEN or not GITHUB_REPO:
         return os.path.exists(APPROVAL_FILE)
-    
+
     try:
         owner, repo = GITHUB_REPO.split('/')
         url = f"https://api.github.com/repos/{owner}/{repo}/contents/{APPROVAL_FILE}"
         headers = {
             "Authorization": f"token {GITHUB_TOKEN}",
-            "Accept": "application/vnd.github+json"
+            "Accept": "application/vnd.github+json",
         }
         response = requests.get(url, headers=headers)
         return response.status_code == 200
@@ -221,39 +357,41 @@ def check_approval_in_github():
         print(f"⚠️ GitHub check failed: {e}")
         return False
 
+
 # === STEP 7: Wait for approval ===
 def wait_for_approval():
     print("⏳ Waiting for approval...")
     print(f"📧 Check your inbox at: {EMAIL_RECEIVER}")
     print("🔗 Click the approval link in the email.")
-    
+
     for attempt in range(20):
         time.sleep(30)
         print(f"   Waiting... {attempt+1}/20")
         if check_approval_in_github():
             return True
-    
+
     print("⏰ Approval timeout. Skipping post.")
     return False
+
 
 # === MAIN ===
 def main():
     print("🚀 Starting Milton Keynes News Bot...")
     print(f"⏰ Run at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    
+
     if os.environ.get("APPROVE") == "yes":
         print("✅ Approval received via workflow input. Posting directly...")
     else:
         print("ℹ️ No approval provided. Will wait for email approval.")
-    
+
     article = fetch_latest_news()
     if not article:
         print("❌ No article found. Exiting.")
         return
-    
+
     ai_content = generate_with_ai(article)
     print(f"📝 Headline: {ai_content['headline']}")
-    
+
     if os.environ.get("APPROVE") != "yes":
         if send_approval_email(ai_content["headline"], ai_content["caption"], article["link"]):
             print("📧 Approval email sent. Waiting for your response...")
@@ -263,11 +401,16 @@ def main():
         else:
             print("❌ Could not send approval email. Exiting.")
             return
-    
+
     print("✅ Approved! Publishing...")
-    image_url = create_image(ai_content["headline"])
+    image_url = create_image(
+        ai_content["headline"],
+        article.get("image"),
+        article.get("credit", ""),
+    )
     full_caption = f"{ai_content['caption']}\n\nRead more: {article['link']}"
     post_to_instagram(image_url, full_caption)
+
 
 if __name__ == "__main__":
     main()

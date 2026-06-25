@@ -192,10 +192,10 @@ def create_image(headline, image_url=None, credit=""):
     .card { position:relative; width:1080px; height:1080px; overflow:hidden; background:#111; }
     .photo { position:absolute; top:0; left:0; right:0; bottom:0; background-size:cover; background-position:center; }
     .overlay { position:absolute; top:0; left:0; right:0; bottom:0;
-      background:linear-gradient(to bottom, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0.55) 60%, rgba(0,0,0,0.93) 100%); }
+      background:linear-gradient(to bottom, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0.60) 60%, rgba(0,0,0,0.97) 100%); }
     .topbar { position:absolute; top:42px; left:42px; }
-    .logo-badge { background:#ffffff; border-radius:18px; padding:14px 22px; box-shadow:0 8px 22px rgba(0,0,0,0.35); }
-    .logo-badge img { height:62px; display:block; }
+    .logo-badge { background:#ffffff; border-radius:18px; padding:18px 24px; box-shadow:0 8px 22px rgba(0,0,0,0.35); }
+    .logo-badge img { height:72px; width:auto; object-fit:contain; display:block; }
     .bottom { position:absolute; left:54px; right:54px; bottom:108px; }
     .accent { width:96px; height:11px; background:#cc0000; border-radius:6px; margin-bottom:26px; }
     .headline { color:#ffffff; font-weight:700; font-size:70px; line-height:1.08; text-transform:uppercase;

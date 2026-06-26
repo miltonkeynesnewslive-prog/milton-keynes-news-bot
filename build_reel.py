@@ -363,11 +363,10 @@ def make_card(story, path, logo_img):
     rgba = Image.alpha_composite(rgba, _vertical_gradient((W, H), (0, 0, 0, 0), (0, 0, 0, 245)))
     card = rgba.convert("RGB")
 
-    # Logo + kicker
+    # Logo
     if logo_img is not None:
-        _, bh = _logo_badge(card, logo_img, 60, 70, 200)
+        _logo_badge(card, logo_img, 60, 70, 200)
     draw = ImageDraw.Draw(card)
-    draw.text((66, 300), "MILTON KEYNES NEWS", font=_font(40), fill=WHITE)
 
     # Headline (bottom)
     hfont = _font(72)
@@ -502,7 +501,7 @@ def main():
     stories = get_today_stories()
     if not stories:
         print("❌ No stories. Exiting.")
-        return
+        return []
 
     intro, story_lines, outro = write_script_parts(stories)
     segment_texts = [intro] + story_lines + [outro]
@@ -532,6 +531,7 @@ def main():
     assemble(cards, card_durations, voice, VIDEO_OUT,
              music_path=MUSIC_FILE if os.path.exists(MUSIC_FILE) else None)
     print("\n🎬 Reel built: reel.mp4")
+    return stories
 
 
 if __name__ == "__main__":

@@ -29,6 +29,12 @@ HTML_CSS_USER_ID = os.environ.get("HTML_CSS_USER_ID")
 # This logo file must be committed to the repo root so this raw URL works.
 LOGO_URL = "https://raw.githubusercontent.com/miltonkeynesnewslive-prog/milton-keynes-news-bot/main/MK%20News%20Logo.png"
 
+# Core local hashtags appended to every post (deduped against AI-generated ones).
+CORE_HASHTAGS = [
+    "#MiltonKeynes", "#MKNews", "#MiltonKeynesNews", "#MK",
+    "#Buckinghamshire", "#ThamesValley", "#LocalNews", "#MKCommunity",
+]
+
 # === GITHUB CONFIGURATION ===
 GITHUB_TOKEN = os.environ.get("APPROVAL_TOKEN")
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY")
@@ -184,7 +190,7 @@ def generate_with_ai(article):
         print("⚠️ No OpenAI API key found. Using fallback text.")
         return {
             "headline": article["title"][:60],
-            "caption": f"{article['title']}\n\nRead more: {article['link']} #MiltonKeynesNews",
+            "caption": article["title"],
         }
     try:
         response = requests.post(
@@ -198,7 +204,15 @@ def generate_with_ai(article):
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You are a social media assistant. Create a short headline (max 8 words) and an engaging Instagram caption (under 150 words) with emojis. Format your response as: HEADLINE: ... CAPTION: ...",
+                        "content": (
+                            "You are a social media editor for a Milton Keynes local news Instagram page. "
+                            "Write a short punchy headline (max 8 words) and an engaging Instagram caption "
+                            "(under 120 words) with a few well-placed emojis. "
+                            "Do NOT include any links, URLs, or the phrase 'read more'. "
+                            "End the caption with 5-8 specific, trending, relevant hashtags for this story "
+                            "(mix topic-specific tags with local ones). "
+                            "Format your response exactly as: HEADLINE: ... CAPTION: ..."
+                        ),
                     },
                     {
                         "role": "user",
@@ -228,20 +242,41 @@ def generate_with_ai(article):
         return {"headline": article["title"][:60], "caption": article["title"]}
 
 
+def finalize_caption(caption):
+    """Strip any stray links, then append core local hashtags (deduped)."""
+    # Remove any 'Read more' lines or bare URLs the model might still add.
+    caption = re.sub(r"(?im)^\s*read more.*$", "", caption)
+    caption = re.sub(r"https?://\S+", "", caption).strip()
+
+    existing = {h.lower() for h in re.findall(r"#\w+", caption)}
+    extra = [h for h in CORE_HASHTAGS if h.lower() not in existing]
+    if extra:
+        caption = caption.rstrip() + "\n\n" + " ".join(extra)
+    return caption.strip()
+
+
 # === STEP 3: Create a branded news graphic ===
 def create_image(headline, image_url=None, credit=""):
     """Build a branded news graphic (article photo + logo + headline) via htmlcsstoimage.com."""
     print("🖼️ Creating branded image...")
 
     clean_headline = strip_emojis(headline) or "Milton Keynes News"
-    # If the article had no photo, fall back to a dark branded background.
-    bg = image_url or "https://placehold.co/1080x1080/111111/111111.png"
+    has_photo = bool(image_url)
+
+    if has_photo:
+        backdrop = f"""
+      <div class="photo-blur" style="background-image:url('{image_url}')"></div>
+      <div class="photo" style="background-image:url('{image_url}')"></div>
+      <div class="overlay"></div>"""
+    else:
+        backdrop = """
+      <div class="brand-bg"></div>
+      <div class="brand-watermark">MK</div>
+      <div class="brand-kicker">MILTON KEYNES NEWS</div>"""
 
     html = f"""
     <div class="card">
-      <div class="photo-blur" style="background-image:url('{bg}')"></div>
-      <div class="photo" style="background-image:url('{bg}')"></div>
-      <div class="overlay"></div>
+      {backdrop}
       <div class="topbar">
         <div class="logo-badge"><img src="{LOGO_URL}" /></div>
       </div>
@@ -261,6 +296,12 @@ def create_image(headline, image_url=None, credit=""):
     .photo { position:absolute; top:0; left:0; right:0; bottom:0; background-size:contain; background-repeat:no-repeat; background-position:center; }
     .overlay { position:absolute; top:0; left:0; right:0; bottom:0;
       background:linear-gradient(to bottom, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0.60) 60%, rgba(0,0,0,0.97) 100%); }
+    .brand-bg { position:absolute; top:0; left:0; right:0; bottom:0;
+      background:radial-gradient(circle at 28% 22%, #e00000 0%, #a30000 34%, #4d0000 64%, #1a0000 100%); }
+    .brand-watermark { position:absolute; right:-50px; bottom:-130px; font-size:600px; line-height:1;
+      font-weight:700; color:rgba(255,255,255,0.06); letter-spacing:-30px; }
+    .brand-kicker { position:absolute; top:250px; left:54px; right:54px;
+      color:rgba(255,255,255,0.9); font-size:42px; font-weight:600; letter-spacing:8px; }
     .topbar { position:absolute; top:42px; left:42px; }
     .logo-badge { background:#ffffff; border-radius:18px; padding:18px 24px; box-shadow:0 8px 22px rgba(0,0,0,0.35); }
     .logo-badge img { height:72px; width:auto; object-fit:contain; display:block; }
@@ -518,7 +559,7 @@ def main():
         article.get("image"),
         article.get("credit", ""),
     )
-    full_caption = f"{ai_content['caption']}\n\nRead more: {article['link']}"
+    full_caption = finalize_caption(ai_content["caption"])
     post_to_instagram(image_url, full_caption)
 
 

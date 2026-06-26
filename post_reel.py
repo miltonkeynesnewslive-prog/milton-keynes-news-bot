@@ -34,7 +34,7 @@ EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 # Second Pipedream workflow that creates reel_approved.txt (NOT the photo one).
 # Paste the URL of your NEW reel-approval Pipedream workflow here:
-REEL_PIPEDREAM_URL = "https://PASTE-YOUR-REEL-PIPEDREAM-URL.m.pipedream.net"
+REEL_PIPEDREAM_URL = "https://eoydp1e9yssfbk3.m.pipedream.net"
 
 VIDEO_FILE = "reel.mp4"
 HOST_PATH = "reels/latest.mp4"

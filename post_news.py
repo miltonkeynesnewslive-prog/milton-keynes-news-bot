@@ -19,7 +19,8 @@ EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 RSS_FEEDS = [
     "https://www.miltonkeynes.co.uk/news/rss",
     "https://www.milton-keynes.gov.uk/news/rss.xml",
-    "https://www.thamesvalley.police.uk/news/thames-valley/news/GetNewsRss/",
+    # Police/crime news via Google News (the police site itself is behind a bot wall):
+    "https://news.google.com/rss/search?q=Thames+Valley+Police+Milton+Keynes&hl=en-GB&gl=GB&ceid=GB:en",
 ]
 
 # === IMAGE / BRANDING CONFIGURATION ===

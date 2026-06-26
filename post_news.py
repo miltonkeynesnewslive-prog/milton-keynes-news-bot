@@ -1,6 +1,8 @@
 import os
 import re
 import time
+import json
+import base64
 import feedparser
 import requests
 import smtplib
@@ -39,6 +41,7 @@ CORE_HASHTAGS = [
 GITHUB_TOKEN = os.environ.get("APPROVAL_TOKEN")
 GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY")
 APPROVAL_FILE = "approved.txt"
+POSTED_FILE = "posted.json"
 PIPEDREAM_URL = "https://eomj13e55tyupi0.m.pipedream.net"
 
 
@@ -144,7 +147,16 @@ def load_feed(url):
     return feedparser.parse(url)
 
 
-def fetch_latest_news():
+def _entry_time(entry):
+    t = entry.get("published_parsed") or entry.get("updated_parsed")
+    try:
+        return time.mktime(t) if t else 0
+    except Exception:
+        return 0
+
+
+def fetch_news_candidates():
+    """Return every article from all feeds, newest first, as a list of dicts."""
     print("📰 Fetching latest news from all sources...")
     all_entries = []
     for url in RSS_FEEDS:
@@ -161,26 +173,70 @@ def fetch_latest_news():
 
     if not all_entries:
         print("❌ No articles found in any feed.")
-        return None
+        return []
 
-    def entry_time(entry):
-        t = entry.get("published_parsed") or entry.get("updated_parsed")
-        try:
-            return time.mktime(t) if t else 0
-        except Exception:
-            return 0
+    all_entries.sort(key=_entry_time, reverse=True)
+    candidates = []
+    for e in all_entries:
+        candidates.append({
+            "title": e.get("title", "Milton Keynes News"),
+            "content": e.get("summary", e.get("description", "")),
+            "link": e.get("link", ""),
+            "published": e.get("published", ""),
+            "image": get_article_image(e),
+            "credit": get_image_credit(e),
+        })
+    return candidates
 
-    all_entries.sort(key=entry_time, reverse=True)
-    latest = all_entries[0]
-    print(f"✅ Newest across all feeds: {latest.get('title', 'Untitled')}")
-    return {
-        "title": latest.get("title", "Milton Keynes News"),
-        "content": latest.get("summary", latest.get("description", "")),
-        "link": latest.get("link", ""),
-        "published": latest.get("published", ""),
-        "image": get_article_image(latest),
-        "credit": get_image_credit(latest),
-    }
+
+# === Posted-history (so the same story is never offered twice) ===
+def load_posted():
+    """Return (list_of_posted_links, sha) from posted.json in the repo."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return [], None
+    try:
+        owner, repo = GITHUB_REPO.split('/')
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{POSTED_FILE}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+        }
+        r = requests.get(url, headers=headers)
+        if r.status_code == 200:
+            data = r.json()
+            content = base64.b64decode(data["content"]).decode("utf-8")
+            return json.loads(content), data["sha"]
+        return [], None
+    except Exception as e:
+        print(f"⚠️ Could not load posted history: {e}")
+        return [], None
+
+
+def save_posted(links, sha):
+    """Write the posted-links list back to posted.json (keeps the last 200)."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return
+    try:
+        owner, repo = GITHUB_REPO.split('/')
+        url = f"https://api.github.com/repos/{owner}/{repo}/contents/{POSTED_FILE}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json",
+        }
+        trimmed = links[-200:]
+        content = base64.b64encode(
+            json.dumps(trimmed, indent=2).encode("utf-8")
+        ).decode("utf-8")
+        payload = {"message": "Update posted history", "content": content}
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(url, headers=headers, json=payload)
+        if r.status_code in (200, 201):
+            print("📝 Updated posted history.")
+        else:
+            print(f"⚠️ Could not save posted history ({r.status_code}): {r.text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Could not save posted history: {e}")
 
 
 # === STEP 2: Generate headline and caption with AI ===
@@ -531,10 +587,23 @@ def main():
     else:
         print("ℹ️ No approval provided. Will wait for email approval.")
 
-    article = fetch_latest_news()
-    if not article:
-        print("❌ No article found. Exiting.")
+    # Load history and pick the newest story we haven't posted yet.
+    posted_links, posted_sha = load_posted()
+    print(f"🗂️ {len(posted_links)} stories in posted history.")
+
+    candidates = fetch_news_candidates()
+    if not candidates:
+        print("❌ No articles found. Exiting.")
         return
+
+    article = next(
+        (c for c in candidates if c["link"] and c["link"] not in posted_links),
+        None,
+    )
+    if not article:
+        print("✅ No new (unposted) stories right now. Nothing to do.")
+        return
+    print(f"📌 Selected newest unposted: {article['title']}")
 
     ai_content = generate_with_ai(article)
     print(f"📝 Headline: {ai_content['headline']}")
@@ -560,7 +629,15 @@ def main():
         article.get("credit", ""),
     )
     full_caption = finalize_caption(ai_content["caption"])
-    post_to_instagram(image_url, full_caption)
+    success = post_to_instagram(image_url, full_caption)
+
+    # Only record it as posted if it actually published — so a failed post
+    # can be retried next run, and a successful one is never offered again.
+    if success and article.get("link"):
+        posted_links.append(article["link"])
+        save_posted(posted_links, posted_sha)
+    elif not success:
+        print("⚠️ Post did not publish — not recording it, will retry next run.")
 
 
 if __name__ == "__main__":

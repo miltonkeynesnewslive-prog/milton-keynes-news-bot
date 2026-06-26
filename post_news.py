@@ -96,15 +96,17 @@ def get_image_credit(entry):
 def load_feed(url):
     """Fetch a feed with a browser-style request, then parse it.
 
-    Some sites (e.g. police/gov) block feedparser's default request and return
-    a block page, which looks like an empty feed. Fetching with a real
-    User-Agent first avoids that. Falls back to direct parsing if needed.
+    Some sites block GitHub's data-centre IP range and return 403, or block
+    feedparser's default request. We try a direct browser-style fetch first,
+    then a public proxy (for IP-blocked sites), then feedparser directly.
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Accept": "application/rss+xml, application/xml, text/xml, */*",
     }
+
+    # 1) Direct fetch
     try:
         resp = requests.get(url, headers=headers, timeout=30)
         if resp.status_code == 200 and resp.content:
@@ -114,9 +116,24 @@ def load_feed(url):
         else:
             print(f"   ⚠️ HTTP {resp.status_code} from {url}")
     except Exception as e:
-        print(f"   ⚠️ Fetch failed for {url}: {e}")
+        print(f"   ⚠️ Direct fetch failed for {url}: {e}")
 
-    # Fallback: let feedparser fetch it directly.
+    # 2) Proxy fetch (for sites that block data-centre IPs, e.g. police)
+    try:
+        proxied = "https://api.allorigins.win/raw?url=" + requests.utils.quote(url, safe="")
+        print(f"   ↪️ Retrying via proxy...")
+        presp = requests.get(proxied, headers=headers, timeout=45)
+        if presp.status_code == 200 and presp.content:
+            feed = feedparser.parse(presp.content)
+            if feed.entries:
+                print(f"   ✅ Proxy worked for {url}")
+                return feed
+        else:
+            print(f"   ⚠️ Proxy HTTP {presp.status_code} for {url}")
+    except Exception as e:
+        print(f"   ⚠️ Proxy fetch failed for {url}: {e}")
+
+    # 3) Last resort: let feedparser fetch it directly.
     return feedparser.parse(url)
 
 

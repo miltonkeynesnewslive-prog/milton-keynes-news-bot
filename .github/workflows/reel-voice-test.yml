@@ -1,0 +1,32 @@
+name: "Reel Voice Test"
+
+on:
+  workflow_dispatch:
+
+jobs:
+  voice:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install edge-tts feedparser requests
+
+      - name: Generate voice sample
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python make_reel_voice.py
+
+      - name: Upload audio + script
+        uses: actions/upload-artifact@v4
+        with:
+          name: reel-voice
+          path: |
+            reel_voice.mp3
+            reel_script.txt

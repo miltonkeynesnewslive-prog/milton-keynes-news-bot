@@ -40,14 +40,14 @@ RSS_FEEDS = [
 LOGO_URL = "https://raw.githubusercontent.com/miltonkeynesnewslive-prog/milton-keynes-news-bot/main/MK%20News%20Logo.png"
 
 VOICE = "en-GB-SoniaNeural"
-SPEAKING_RATE = "+3%"
+SPEAKING_RATE = "+6%"
 
-MAX_STORIES = 4
+MAX_STORIES = 5
 W, H = 1080, 1920
 FPS = 30
-GAP = 0.35          # silence between spoken segments
-TAIL = 0.7          # silence after the last segment
-ZOOM_MAX = 1.05     # gentle Ken Burns (was too strong before)
+GAP = 0.30          # silence between spoken segments
+TAIL = 0.6          # silence after the last segment
+ZOOM_MAX = 1.05     # gentle Ken Burns
 
 CARD_DIR = "cards"
 VOICE_OUT = "reel_voice.mp3"
@@ -171,7 +171,7 @@ def get_today_stories(max_items=MAX_STORIES):
 
 # ---------- Script (structured per-segment) ----------
 def write_script_parts(stories):
-    """Return (intro_text, [story_text,...], outro_text)."""
+    """Return (hook_text, [story_text,...], outro_text)."""
     print("✍️ Writing the bulletin script...")
     n = len(stories)
     block = "\n".join(f"{i+1}. {s['title']} — {s['summary']}" for i, s in enumerate(stories))
@@ -185,13 +185,17 @@ def write_script_parts(stories):
                     "model": "gpt-4o-mini",
                     "messages": [
                         {"role": "system", "content": (
-                            "You script a daily Milton Keynes news reel for a friendly British presenter. "
-                            "Respond with ONLY valid JSON, no markdown, in this exact shape: "
-                            '{"intro": "...", "stories": ["...", "..."], "outro": "..."}. '
-                            f'"stories" must have EXACTLY {n} items, in the same order as given, each a '
-                            "natural 1-2 sentence spoken summary. "
-                            "intro: one warm sentence greeting Milton Keynes for the evening. "
-                            "outro: one short friendly sign-off inviting people to follow for tomorrow. "
+                            "You script a fast, punchy daily Milton Keynes news reel for Instagram, "
+                            "read by a British presenter. Retention is everything: NO greetings, NO 'good "
+                            "evening', NO 'welcome'. "
+                            "Respond with ONLY valid JSON, no markdown, in this shape: "
+                            '{"hook": "...", "stories": ["...", "..."], "outro": "..."}. '
+                            f'"hook" is ONE short scroll-stopping sentence (max ~12 words) that makes people '
+                            f"stop and watch — either tease the single most surprising story, or say something "
+                            f'punchy like "Milton Keynes, {n} things you need to know today". '
+                            f'"stories" must have EXACTLY {n} items in the given order, each ONE tight, natural '
+                            "spoken sentence (no waffle). "
+                            'The "outro" is one short line telling people to follow for more. '
                             "No emojis, hashtags, numbering, or URLs anywhere."
                         )},
                         {"role": "user", "content": f"Today's stories:\n{block}"},
@@ -203,12 +207,12 @@ def write_script_parts(stories):
                 raw = resp.json()["choices"][0]["message"]["content"].strip()
                 raw = re.sub(r"^```(json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
                 data = json.loads(raw)
-                intro = str(data.get("intro", "")).strip()
+                hook = str(data.get("hook", data.get("intro", ""))).strip()
                 outro = str(data.get("outro", "")).strip()
                 s_lines = [str(x).strip() for x in data.get("stories", []) if str(x).strip()]
-                if intro and outro and len(s_lines) == n:
+                if hook and outro and len(s_lines) == n:
                     print("✅ Script ready.")
-                    return intro, s_lines, outro
+                    return hook, s_lines, outro
                 print("⚠️ Script JSON shape unexpected; using fallback.")
             else:
                 print(f"⚠️ AI error {resp.status_code}; using fallback.")
@@ -216,10 +220,10 @@ def write_script_parts(stories):
             print(f"⚠️ AI failed ({e}); using fallback.")
 
     # Deterministic fallback
-    intro = "Good evening, Milton Keynes. Here are today's top stories."
+    hook = f"Milton Keynes, {n} stories you need to know today."
     s_lines = [s["title"] + "." for s in stories]
-    outro = "That's your Milton Keynes update. Follow us for more every evening."
-    return intro, s_lines, outro
+    outro = "Follow us for more, every weekday."
+    return hook, s_lines, outro
 
 
 # ---------- Voice (per segment) ----------
@@ -503,12 +507,12 @@ def main():
         print("❌ No stories. Exiting.")
         return []
 
-    intro, story_lines, outro = write_script_parts(stories)
-    segment_texts = [intro] + story_lines + [outro]
+    hook, story_lines, outro = write_script_parts(stories)
+    segment_texts = [hook] + story_lines + [outro]
 
     with open(SCRIPT_OUT, "w", encoding="utf-8") as f:
-        f.write(intro + "\n\n" + "\n\n".join(story_lines) + "\n\n" + outro)
-    print("\n----- SCRIPT -----\n" + intro)
+        f.write(hook + "\n\n" + "\n\n".join(story_lines) + "\n\n" + outro)
+    print("\n----- SCRIPT -----\n" + hook)
     for s in story_lines:
         print(" • " + s)
     print(outro + "\n------------------\n")
@@ -520,8 +524,10 @@ def main():
     logo_img = li.convert("RGBA") if li is not None else None
 
     # Cards (same count/order as segments)
-    date_str = datetime.now().strftime("%A %d %B")
-    cards = [make_title_card("MILTON KEYNES NEWS", "EVENING UPDATE", date_str,
+    n = len(stories)
+    noun = "THING" if n == 1 else "THINGS"
+    cards = [make_title_card("MILTON KEYNES NEWS", f"{n} {noun} TODAY",
+                             datetime.now().strftime("%A %d %B"),
                              os.path.join(CARD_DIR, "intro.png"), logo_img)]
     for i, s in enumerate(stories):
         cards.append(make_card(s, os.path.join(CARD_DIR, f"story_{i}.png"), logo_img))

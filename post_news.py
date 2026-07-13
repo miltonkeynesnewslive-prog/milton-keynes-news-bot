@@ -31,10 +31,12 @@ HTML_CSS_USER_ID = os.environ.get("HTML_CSS_USER_ID")
 # This logo file must be committed to the repo root so this raw URL works.
 LOGO_URL = "https://raw.githubusercontent.com/miltonkeynesnewslive-prog/milton-keynes-news-bot/main/MK%20News%20Logo.png"
 
-# Core local hashtags appended to every post (deduped against AI-generated ones).
-CORE_HASHTAGS = [
-    "#MiltonKeynes", "#MKNews", "#MiltonKeynesNews", "#MK",
-    "#Buckinghamshire", "#ThamesValley", "#LocalNews", "#MKCommunity",
+# Hashtags: 2 core tags always, plus a rotating pool so every post differs.
+CORE_HASHTAGS = ["#MiltonKeynes", "#MKNews"]
+ROTATING_HASHTAGS = [
+    "#MiltonKeynesNews", "#Buckinghamshire", "#BucksNews", "#ThamesValley",
+    "#LocalNews", "#MKCommunity", "#Bletchley", "#StonyStratford",
+    "#Wolverton", "#NewportPagnell", "#CentralMK", "#MKLife",
 ]
 
 # === GITHUB CONFIGURATION ===
@@ -261,12 +263,18 @@ def generate_with_ai(article):
                     {
                         "role": "system",
                         "content": (
-                            "You are a social media editor for a Milton Keynes local news Instagram page. "
-                            "Write a short punchy headline (max 8 words) and an engaging Instagram caption "
-                            "(under 120 words) with a few well-placed emojis. "
-                            "Do NOT include any links, URLs, or the phrase 'read more'. "
-                            "End the caption with 5-8 specific, trending, relevant hashtags for this story "
-                            "(mix topic-specific tags with local ones). "
+                            "You are a local news editor for a Milton Keynes Instagram page writing for real "
+                            "MK residents. Write a short factual headline (max 8 words) and a concise caption "
+                            "(under 90 words). "
+                            "Lead with the concrete facts — what happened, where in Milton Keynes, and when — "
+                            "in plain, specific language. Do NOT sensationalise: avoid hype like 'chaos erupted', "
+                            "'utter mayhem', or vague teasers. At most one or two subtle emojis. "
+                            "Do NOT include any links, URLs, or 'read more'. "
+                            "End the caption with ONE genuine, easy-to-answer question that invites locals to "
+                            "comment, referencing the specific area where possible "
+                            "(e.g. 'Were you near <area> when this happened?'). "
+                            "Then on a new line add 3-4 hashtags specific to THIS story "
+                            "(topic and neighbourhood), not generic filler. "
                             "Format your response exactly as: HEADLINE: ... CAPTION: ..."
                         ),
                     },
@@ -299,16 +307,39 @@ def generate_with_ai(article):
 
 
 def finalize_caption(caption):
-    """Strip any stray links, then append core local hashtags (deduped)."""
-    # Remove any 'Read more' lines or bare URLs the model might still add.
+    """Strip stray links, then build a tight, rotating hashtag set (~5-6 total)."""
+    import random
     caption = re.sub(r"(?im)^\s*read more.*$", "", caption)
     caption = re.sub(r"https?://\S+", "", caption).strip()
 
-    existing = {h.lower() for h in re.findall(r"#\w+", caption)}
-    extra = [h for h in CORE_HASHTAGS if h.lower() not in existing]
-    if extra:
-        caption = caption.rstrip() + "\n\n" + " ".join(extra)
-    return caption.strip()
+    # Pull the AI's story-specific hashtags, then remove them from the body so
+    # we control the final block.
+    ai_tags, seen = [], set()
+    for h in re.findall(r"#\w+", caption):
+        low = h.lower()
+        if low not in seen:
+            seen.add(low)
+            ai_tags.append(h)
+    caption = re.sub(r"#\w+", "", caption).strip()
+    caption = re.sub(r"[ \t]+\n", "\n", caption)
+    caption = re.sub(r"\n{3,}", "\n\n", caption).strip()
+
+    # Build final tags: core + up to 3 AI topical + 1 rotating pool tag.
+    final, used = [], set()
+    for h in CORE_HASHTAGS:
+        final.append(h)
+        used.add(h.lower())
+    for h in ai_tags:
+        if len(final) >= 5:
+            break
+        if h.lower() not in used:
+            final.append(h)
+            used.add(h.lower())
+    pool = [h for h in ROTATING_HASHTAGS if h.lower() not in used]
+    if pool:
+        final.append(random.choice(pool))
+
+    return (caption.rstrip() + "\n\n" + " ".join(final)).strip()
 
 
 # === STEP 3: Create a branded news graphic ===

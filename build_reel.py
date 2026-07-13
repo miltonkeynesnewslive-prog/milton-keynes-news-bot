@@ -50,6 +50,10 @@ TAIL = 0.6          # silence after the last segment
 ZOOM_MAX = 1.05     # gentle Ken Burns
 
 CARD_DIR = "cards"
+CLIP_DIR = "clips"
+PEXELS_API_KEY = os.environ.get("PEXELS_API_KEY")
+STOPWORDS = set("the a an of to in on for and or with after before over under from into "
+                "man woman say says new news milton keynes as at by is are was were has have".split())
 VOICE_OUT = "reel_voice.mp3"
 SCRIPT_OUT = "reel_script.txt"
 VIDEO_OUT = "reel.mp4"
@@ -345,9 +349,10 @@ def _logo_badge(card, logo_img, x, y, logo_w):
 
 
 # ---------- Story card ----------
-def make_card(story, path, logo_img):
+def make_card(story, path, logo_img, photo=None):
     card = Image.new("RGB", (W, H), (17, 17, 17))
-    photo = _download_image(story["image"]) if story.get("image") else None
+    if photo is None:
+        photo = _download_image(story["image"]) if story.get("image") else None
 
     if photo is not None:
         # Blurred, darkened fill behind…
@@ -453,6 +458,81 @@ def make_title_card(kicker, big_text, subtitle, path, logo_img):
 
 
 # ---------- FFmpeg ----------
+def story_query(headline):
+    words = [w for w in re.findall(r"[A-Za-z]+", headline)
+             if len(w) > 3 and w.lower() not in STOPWORDS]
+    return " ".join(words[:2]) if words else "Milton Keynes"
+
+
+def pexels_clip(query, out_path):
+    """Best-effort: download a portrait stock clip for a keyword. Returns path or None."""
+    if not PEXELS_API_KEY or not query:
+        return None
+    try:
+        r = requests.get("https://api.pexels.com/videos/search",
+                         headers={"Authorization": PEXELS_API_KEY},
+                         params={"query": query, "orientation": "portrait",
+                                 "per_page": 5, "size": "medium"}, timeout=25)
+        if r.status_code != 200:
+            return None
+        for v in r.json().get("videos", []):
+            files = [f for f in v.get("video_files", [])
+                     if f.get("file_type") == "video/mp4" and f.get("link")]
+            if not files:
+                continue
+            files.sort(key=lambda f: abs((f.get("height") or 0) - 1920))
+            data = requests.get(files[0]["link"], timeout=90)
+            if data.status_code == 200 and data.content:
+                with open(out_path, "wb") as fh:
+                    fh.write(data.content)
+                print(f"   🎬 filler clip for '{query}'")
+                return out_path
+    except Exception as e:
+        print(f"   ⚠️ Pexels '{query}': {e}")
+    return None
+
+
+def make_story_overlay(story, logo_img, path):
+    """Transparent text layer (scrim + logo + headline + footer) for use over footage."""
+    ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ov = Image.alpha_composite(ov, _vertical_gradient((W, H), (0, 0, 0, 110), (0, 0, 0, 0)))
+    ov = Image.alpha_composite(ov, _vertical_gradient((W, H), (0, 0, 0, 0), (0, 0, 0, 245)))
+    if logo_img is not None:
+        _logo_badge(ov, logo_img, 60, 70, 200)
+    draw = ImageDraw.Draw(ov)
+    hfont = _font(72)
+    lines = _wrap(draw, story["title"].upper(), hfont, W - 130)[:5]
+    line_h = hfont.size + 10
+    y = H - 320 - line_h * len(lines)
+    draw.rounded_rectangle([66, y - 42, 66 + 120, y - 28], radius=6, fill=RED)
+    for ln in lines:
+        draw.text((69, y + 3), ln, font=hfont, fill=(0, 0, 0, 190))  # shadow
+        draw.text((66, y), ln, font=hfont, fill=WHITE)
+        y += line_h
+    draw.rectangle([0, H - 96, W, H], fill=RED)
+    draw.text((66, H - 80), "@miltonkeynes_news", font=_font(40), fill=WHITE)
+    ov.save(path)
+    return path
+
+
+def build_overlay_clip(bg_video, gradient_png, overlay_png, duration, out_path):
+    """A clip = footage (or red gradient) with a transparent text overlay on top."""
+    if bg_video and os.path.exists(bg_video):
+        vf = ("[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+              "crop=1080:1920,setsar=1,eq=brightness=-0.05[bg];"
+              "[bg][1:v]overlay=0:0,format=yuv420p[v]")
+        cmd = ["ffmpeg", "-y", "-stream_loop", "-1", "-i", bg_video, "-i", overlay_png,
+               "-filter_complex", vf, "-map", "[v]", "-an", "-r", str(FPS),
+               "-t", f"{duration:.3f}", "-preset", "veryfast", out_path]
+    else:
+        vf = "[0:v][1:v]overlay=0:0,format=yuv420p[v]"
+        cmd = ["ffmpeg", "-y", "-loop", "1", "-t", f"{duration:.3f}", "-i", gradient_png,
+               "-i", overlay_png, "-filter_complex", vf, "-map", "[v]", "-an",
+               "-r", str(FPS), "-preset", "veryfast", out_path]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return out_path
+
+
 def _clip_from_card(card_path, duration, out_path, zoom_in=True):
     frames = max(int(duration * FPS), 1)
     z = f"min(zoom+0.00035,{ZOOM_MAX})" if zoom_in else f"if(eq(on,1),{ZOOM_MAX},max(zoom-0.00035,1.0))"
@@ -466,6 +546,27 @@ def _clip_from_card(card_path, duration, out_path, zoom_in=True):
          "-frames:v", str(frames), "-r", str(FPS), "-preset", "veryfast", "-an", out_path],
         check=True, capture_output=True,
     )
+    return out_path
+
+
+def mux(clips, audio_path, out_path, music_path=None):
+    with open("video_list.txt", "w") as f:
+        for c in clips:
+            f.write(f"file '{c}'\n")
+    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", "video_list.txt",
+                    "-c", "copy", "silent.mp4"], check=True, capture_output=True)
+    print("🎚️ Muxing audio...")
+    have_music = music_path and os.path.exists(music_path)
+    cmd = ["ffmpeg", "-y", "-i", "silent.mp4", "-i", audio_path]
+    if have_music:
+        cmd += ["-stream_loop", "-1", "-i", music_path,
+                "-filter_complex", "[2:a]volume=0.10[m];[1:a][m]amix=inputs=2:duration=first:dropout_transition=2[a]",
+                "-map", "0:v", "-map", "[a]"]
+    else:
+        cmd += ["-map", "0:v", "-map", "1:a"]
+    cmd += ["-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-shortest", out_path]
+    subprocess.run(cmd, check=True, capture_output=True)
+    print(f"✅ Saved {out_path}")
     return out_path
 
 
@@ -522,20 +623,41 @@ def main():
     # Logo
     li = _download_image(LOGO_URL)
     logo_img = li.convert("RGBA") if li is not None else None
+    os.makedirs(CLIP_DIR, exist_ok=True)
 
-    # Cards (same count/order as segments)
     n = len(stories)
     noun = "THING" if n == 1 else "THINGS"
-    cards = [make_title_card("MILTON KEYNES NEWS", f"{n} {noun} TODAY",
-                             datetime.now().strftime("%A %d %B"),
-                             os.path.join(CARD_DIR, "intro.png"), logo_img)]
-    for i, s in enumerate(stories):
-        cards.append(make_card(s, os.path.join(CARD_DIR, f"story_{i}.png"), logo_img))
-    cards.append(make_title_card("THANKS FOR WATCHING", "FOLLOW FOR MORE", "@miltonkeynes_news",
-                                 os.path.join(CARD_DIR, "outro.png"), logo_img))
+    clips = []
 
-    assemble(cards, card_durations, voice, VIDEO_OUT,
-             music_path=MUSIC_FILE if os.path.exists(MUSIC_FILE) else None)
+    # Intro clip
+    intro_png = make_title_card("MILTON KEYNES NEWS", f"{n} {noun} TODAY",
+                                datetime.now().strftime("%A %d %B"),
+                                os.path.join(CARD_DIR, "intro.png"), logo_img)
+    clips.append(_clip_from_card(intro_png, card_durations[0], "clip_0.mp4", zoom_in=True))
+
+    # Story clips — prefer the article's own photo; Pexels footage only as filler
+    for i, s in enumerate(stories):
+        d = card_durations[1 + i]
+        out = f"clip_{1 + i}.mp4"
+        photo = _download_image(s["image"]) if s.get("image") else None
+        if photo is not None:
+            card = make_card(s, os.path.join(CARD_DIR, f"story_{i}.png"), logo_img, photo=photo)
+            _clip_from_card(card, d, out, zoom_in=(i % 2 == 0))
+        else:
+            overlay = make_story_overlay(s, logo_img, os.path.join(CARD_DIR, f"story_{i}_ov.png"))
+            grad = os.path.join(CARD_DIR, f"story_{i}_grad.png")
+            _vertical_gradient((W, H), (224, 0, 0, 255), (20, 0, 0, 255)).convert("RGB").save(grad)
+            bg = (pexels_clip(story_query(s["title"]), os.path.join(CLIP_DIR, f"story_{i}.mp4"))
+                  or pexels_clip("Milton Keynes England", os.path.join(CLIP_DIR, f"story_{i}.mp4")))
+            build_overlay_clip(bg, grad, overlay, d, out)
+        clips.append(out)
+
+    # Outro clip
+    outro_png = make_title_card("THANKS FOR WATCHING", "FOLLOW FOR MORE", "@miltonkeynes_news",
+                                os.path.join(CARD_DIR, "outro.png"), logo_img)
+    clips.append(_clip_from_card(outro_png, card_durations[-1], f"clip_{len(clips)}.mp4", zoom_in=False))
+
+    mux(clips, voice, VIDEO_OUT, music_path=MUSIC_FILE if os.path.exists(MUSIC_FILE) else None)
     print("\n🎬 Reel built: reel.mp4")
     return stories
 

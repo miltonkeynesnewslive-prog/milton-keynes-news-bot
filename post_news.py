@@ -459,9 +459,6 @@ def _render_card(headline, image_url=None, credit=""):
         card.paste(logo_r, (54 + pad, 54 + pad), logo_r)
         draw = ImageDraw.Draw(card)
 
-    # Kicker
-    draw.text((60, 320), "MILTON KEYNES NEWS", font=_img_font(40), fill=(255, 255, 255))
-
     # Headline (bottom)
     clean = strip_emojis(headline) or "Milton Keynes News"
     hfont = _img_font(72)

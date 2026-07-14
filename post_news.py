@@ -6,10 +6,12 @@ import base64
 import feedparser
 import requests
 import smtplib
+from io import BytesIO
 from html import escape as html_escape
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 
 # === CONFIGURATION ===
 INSTAGRAM_ACCESS_TOKEN = os.environ.get("INSTAGRAM_ACCESS_TOKEN")
@@ -342,98 +344,194 @@ def finalize_caption(caption):
     return (caption.rstrip() + "\n\n" + " ".join(final)).strip()
 
 
-# === STEP 3: Create a branded news graphic ===
-def create_image(headline, image_url=None, credit=""):
-    """Build a branded news graphic (article photo + logo + headline) via htmlcsstoimage.com."""
-    print("🖼️ Creating branded image...")
+# === STEP 3: Create a branded news graphic (free, local, via Pillow) ===
+IMG_W, IMG_H = 1080, 1350   # 4:5 feed post
+HOST_IMG_PATH = "posts/latest.png"
 
-    clean_headline = strip_emojis(headline) or "Milton Keynes News"
-    has_photo = bool(image_url)
 
-    if has_photo:
-        backdrop = f"""
-      <div class="photo-blur" style="background-image:url('{image_url}')"></div>
-      <div class="photo" style="background-image:url('{image_url}')"></div>
-      <div class="overlay"></div>"""
-    else:
-        backdrop = """
-      <div class="brand-bg"></div>
-      <div class="brand-watermark">MK</div>
-      <div class="brand-kicker">MILTON KEYNES NEWS</div>"""
-
-    html = f"""
-    <div class="card">
-      {backdrop}
-      <div class="topbar">
-        <div class="logo-badge"><img src="{LOGO_URL}" /></div>
-      </div>
-      <div class="bottom">
-        <div class="accent"></div>
-        <div class="headline">{html_escape(clean_headline)}</div>
-      </div>
-      <div class="credit">{html_escape(credit or "")}</div>
-      <div class="footer"><span>@miltonkeynes_news</span></div>
-    </div>
-    """
-
-    css = """
-    * { margin:0; padding:0; box-sizing:border-box; font-family:'Oswald', sans-serif; }
-    .card { position:relative; width:1080px; height:1080px; overflow:hidden; background:#111; }
-    .photo-blur { position:absolute; top:0; left:0; right:0; bottom:0; background-size:cover; background-position:center; filter:blur(28px) brightness(0.55); transform:scale(1.12); }
-    .photo { position:absolute; top:0; left:0; right:0; bottom:0; background-size:contain; background-repeat:no-repeat; background-position:center; }
-    .overlay { position:absolute; top:0; left:0; right:0; bottom:0;
-      background:linear-gradient(to bottom, rgba(0,0,0,0.10) 0%, rgba(0,0,0,0) 32%, rgba(0,0,0,0.60) 60%, rgba(0,0,0,0.97) 100%); }
-    .brand-bg { position:absolute; top:0; left:0; right:0; bottom:0;
-      background:radial-gradient(circle at 28% 22%, #e00000 0%, #a30000 34%, #4d0000 64%, #1a0000 100%); }
-    .brand-watermark { position:absolute; right:-50px; bottom:-130px; font-size:600px; line-height:1;
-      font-weight:700; color:rgba(255,255,255,0.06); letter-spacing:-30px; }
-    .brand-kicker { position:absolute; top:250px; left:54px; right:54px;
-      color:rgba(255,255,255,0.9); font-size:42px; font-weight:600; letter-spacing:8px; }
-    .topbar { position:absolute; top:42px; left:42px; }
-    .logo-badge { background:#ffffff; border-radius:18px; padding:18px 24px; box-shadow:0 8px 22px rgba(0,0,0,0.35); }
-    .logo-badge img { height:72px; width:auto; object-fit:contain; display:block; }
-    .bottom { position:absolute; left:54px; right:54px; bottom:108px; }
-    .accent { width:96px; height:11px; background:#cc0000; border-radius:6px; margin-bottom:26px; }
-    .headline { color:#ffffff; font-weight:700; font-size:70px; line-height:1.08; text-transform:uppercase;
-      text-shadow:0 3px 16px rgba(0,0,0,0.65);
-      display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden; }
-    .credit { position:absolute; right:30px; bottom:80px; color:rgba(255,255,255,0.65); font-size:22px; font-weight:300; }
-    .footer { position:absolute; left:0; right:0; bottom:0; height:64px; background:#cc0000;
-      display:flex; align-items:center; padding:0 54px; }
-    .footer span { color:#ffffff; font-size:30px; font-weight:500; letter-spacing:1px; }
-    """
-
+def _img_font(size, bold=True):
+    for p in ("oswald.ttf", "Oswald.ttf"):
+        if os.path.exists(p):
+            try:
+                return ImageFont.truetype(p, size)
+            except Exception:
+                pass
+    base = "/usr/share/fonts/truetype/dejavu/"
     try:
-        if not HTML_CSS_API_KEY or not HTML_CSS_USER_ID:
-            raise ValueError("htmlcsstoimage credentials missing")
-        resp = requests.post(
-            "https://hcti.io/v1/image",
-            auth=(HTML_CSS_USER_ID, HTML_CSS_API_KEY),
-            data={
-                "html": html,
-                "css": css,
-                "google_fonts": "Oswald",
-                "selector": ".card",
-                "viewport_width": 1080,
-                "viewport_height": 1080,
-                "device_scale": 1,
-                "ms_delay": 600,
-            },
-            timeout=60,
-        )
-        if resp.status_code in (200, 201):
-            url = resp.json().get("url")
-            if url:
-                print(f"✅ Branded image created: {url}")
-                return url
-        print(f"⚠️ Image API error {resp.status_code}: {resp.text[:200]}")
-    except Exception as e:
-        print(f"⚠️ Image generation failed: {e}")
+        return ImageFont.truetype(base + ("DejaVuSans-Bold.ttf" if bold else "DejaVuSans.ttf"), size)
+    except Exception:
+        return ImageFont.load_default()
 
-    # Fallback: simple placeholder so the bot never fully breaks.
+
+def _img_download(url):
+    try:
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
+        if r.status_code == 200 and r.content:
+            return Image.open(BytesIO(r.content)).convert("RGB")
+    except Exception:
+        pass
+    return None
+
+
+def _img_vgrad(size, top, bottom):
+    w, h = size
+    g = Image.new("RGBA", (1, h))
+    for y in range(h):
+        f = y / max(h - 1, 1)
+        g.putpixel((0, y), tuple(int(top[i] + (bottom[i] - top[i]) * f) for i in range(4)))
+    return g.resize((w, h))
+
+
+def _img_cover(img, size):
+    tw, th = size
+    iw, ih = img.size
+    s = max(tw / iw, th / ih)
+    img = img.resize((int(iw * s), int(ih * s)), Image.LANCZOS)
+    l, t = (img.width - tw) // 2, (img.height - th) // 2
+    return img.crop((l, t, l + tw, t + th))
+
+
+def _img_fit(img, mw, mh):
+    iw, ih = img.size
+    s = min(mw / iw, mh / ih)
+    return img.resize((max(int(iw * s), 1), max(int(ih * s), 1)), Image.LANCZOS)
+
+
+def _img_wrap(draw, text, font, maxw):
+    words, lines, cur = text.split(), [], ""
+    for w in words:
+        t = (cur + " " + w).strip()
+        if draw.textlength(t, font=font) <= maxw:
+            cur = t
+        else:
+            if cur:
+                lines.append(cur)
+            cur = w
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def _render_card(headline, image_url=None, credit=""):
+    """Build the branded news card (matches the style you liked) with Pillow."""
+    W, H = IMG_W, IMG_H
+    RED = (204, 0, 0)
+    WHITE = (255, 255, 255)
+    card = Image.new("RGB", (W, H), (17, 17, 17))
+    photo = _img_download(image_url) if image_url else None
+
+    if photo is not None:
+        blur = _img_cover(photo, (W, H)).filter(ImageFilter.GaussianBlur(40))
+        blur = ImageEnhance.Brightness(blur).enhance(0.45)
+        card.paste(blur, (0, 0))
+        fitted = _img_fit(photo, W, int(H * 0.62))
+        card.paste(fitted, ((W - fitted.width) // 2, 250))
+    else:
+        # Branded red gradient
+        card.paste(_img_vgrad((W, H), (224, 0, 0, 255), (26, 0, 0, 255)).convert("RGB"), (0, 0))
+
+    # Legibility overlays
+    rgba = card.convert("RGBA")
+    rgba = Image.alpha_composite(rgba, _img_vgrad((W, H), (0, 0, 0, 110), (0, 0, 0, 0)))
+    rgba = Image.alpha_composite(rgba, _img_vgrad((W, H), (0, 0, 0, 0), (0, 0, 0, 240)))
+    card = rgba.convert("RGB")
+    draw = ImageDraw.Draw(card)
+
+    # Faint MK watermark (only on the no-photo branded look)
+    if photo is None:
+        wm = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        wd = ImageDraw.Draw(wm)
+        wf = _img_font(440)
+        wd.text((W - 470, H - 640), "MK", font=wf, fill=(255, 255, 255, 20))
+        card = Image.alpha_composite(card.convert("RGBA"), wm).convert("RGB")
+        draw = ImageDraw.Draw(card)
+
+    # Logo badge
+    logo = _img_download(LOGO_URL)
+    if logo is not None:
+        logo = logo.convert("RGBA")
+        lw = 200
+        lr = lw / logo.width
+        lh = int(logo.height * lr)
+        logo_r = logo.resize((lw, lh), Image.LANCZOS)
+        pad = 22
+        draw.rounded_rectangle([54, 54, 54 + lw + pad * 2, 54 + lh + pad * 2], radius=20, fill=WHITE)
+        card.paste(logo_r, (54 + pad, 54 + pad), logo_r)
+        draw = ImageDraw.Draw(card)
+
+    # Kicker
+    draw.text((60, 320), "MILTON KEYNES NEWS", font=_img_font(40), fill=(255, 255, 255))
+
+    # Headline (bottom)
+    clean = strip_emojis(headline) or "Milton Keynes News"
+    hfont = _img_font(72)
+    lines = _img_wrap(draw, clean.upper(), hfont, W - 130)[:5]
+    line_h = hfont.size + 10
+    y = H - 200 - line_h * len(lines)
+    draw.rounded_rectangle([60, y - 44, 60 + 120, y - 30], radius=6, fill=RED)
+    for ln in lines:
+        draw.text((63, y + 3), ln, font=hfont, fill=(0, 0, 0))
+        draw.text((60, y), ln, font=hfont, fill=WHITE)
+        y += line_h
+
+    # Credit
+    if credit:
+        cf = _img_font(24, bold=False)
+        cw = draw.textlength(credit, font=cf)
+        draw.text((W - cw - 30, H - 150), credit, font=cf, fill=(230, 230, 230))
+
+    # Footer
+    draw.rectangle([0, H - 88, W, H], fill=RED)
+    draw.text((60, H - 72), "@miltonkeynes_news", font=_img_font(38), fill=WHITE)
+
+    out = "post_image.png"
+    card.save(out, "PNG")
+    return out
+
+
+def _host_image(path):
+    """Commit the image into the repo and return its public raw URL."""
+    if not GITHUB_TOKEN or not GITHUB_REPO:
+        return None
+    try:
+        owner, repo = GITHUB_REPO.split("/")
+        api = f"https://api.github.com/repos/{owner}/{repo}/contents/{HOST_IMG_PATH}"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+        sha = None
+        r = requests.get(api, headers=headers)
+        if r.status_code == 200:
+            sha = r.json().get("sha")
+        with open(path, "rb") as f:
+            content = base64.b64encode(f.read()).decode("utf-8")
+        payload = {"message": "Update post image", "content": content, "branch": "main"}
+        if sha:
+            payload["sha"] = sha
+        r = requests.put(api, headers=headers, json=payload)
+        if r.status_code in (200, 201):
+            url = r.json()["content"]["download_url"]
+            print(f"✅ Image hosted: {url}")
+            return url
+        print(f"⚠️ Image hosting failed ({r.status_code}): {r.text[:150]}")
+    except Exception as e:
+        print(f"⚠️ Image hosting error: {e}")
+    return None
+
+
+def create_image(headline, image_url=None, credit=""):
+    """Generate the branded card locally (free) and host it for Instagram."""
+    print("🖼️ Creating branded image (Pillow)...")
+    try:
+        path = _render_card(headline, image_url, credit)
+        url = _host_image(path)
+        if url:
+            return url
+    except Exception as e:
+        print(f"⚠️ Local image generation failed: {e}")
+    # Last-resort fallback so the bot never fully breaks.
     print("↩️ Falling back to placeholder image.")
-    encoded = requests.utils.quote(f"MK NEWS | {clean_headline}")
-    return f"https://placehold.co/1080x1080/cc0000/ffffff?text={encoded}"
+    clean = strip_emojis(headline) or "Milton Keynes News"
+    encoded = requests.utils.quote(f"MK NEWS | {clean}")
+    return f"https://placehold.co/1080x1350/cc0000/ffffff?text={encoded}"
 
 
 # === STEP 4: Post to Instagram ===

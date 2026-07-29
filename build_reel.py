@@ -609,11 +609,12 @@ def main():
         return []
 
     hook, story_lines, outro = write_script_parts(stories)
-    segment_texts = [hook] + story_lines + [outro]
+    # Start directly on the news — no spoken hook, no intro title card.
+    segment_texts = story_lines + [outro]
 
     with open(SCRIPT_OUT, "w", encoding="utf-8") as f:
-        f.write(hook + "\n\n" + "\n\n".join(story_lines) + "\n\n" + outro)
-    print("\n----- SCRIPT -----\n" + hook)
+        f.write("\n\n".join(story_lines) + "\n\n" + outro)
+    print("\n----- SCRIPT -----")
     for s in story_lines:
         print(" • " + s)
     print(outro + "\n------------------\n")
@@ -625,20 +626,12 @@ def main():
     logo_img = li.convert("RGBA") if li is not None else None
     os.makedirs(CLIP_DIR, exist_ok=True)
 
-    n = len(stories)
-    noun = "THING" if n == 1 else "THINGS"
     clips = []
-
-    # Intro clip
-    intro_png = make_title_card("MILTON KEYNES NEWS", f"{n} {noun} TODAY",
-                                datetime.now().strftime("%A %d %B"),
-                                os.path.join(CARD_DIR, "intro.png"), logo_img)
-    clips.append(_clip_from_card(intro_png, card_durations[0], "clip_0.mp4", zoom_in=True))
 
     # Story clips — prefer the article's own photo; Pexels footage only as filler
     for i, s in enumerate(stories):
-        d = card_durations[1 + i]
-        out = f"clip_{1 + i}.mp4"
+        d = card_durations[i]
+        out = f"clip_{i}.mp4"
         photo = _download_image(s["image"]) if s.get("image") else None
         if photo is not None:
             card = make_card(s, os.path.join(CARD_DIR, f"story_{i}.png"), logo_img, photo=photo)

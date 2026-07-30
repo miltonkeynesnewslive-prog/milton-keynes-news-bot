@@ -34,7 +34,7 @@ EMAIL_RECEIVER = os.environ.get("EMAIL_RECEIVER")
 
 # Second Pipedream workflow that creates reel_approved.txt (NOT the photo one).
 # Paste the URL of your NEW reel-approval Pipedream workflow here:
-REEL_PIPEDREAM_URL = "https://eoydp1e9yssfbk3.m.pipedream.net"
+REEL_PIPEDREAM_URL = "https://PASTE-YOUR-REEL-PIPEDREAM-URL.m.pipedream.net"
 
 VIDEO_FILE = "reel.mp4"
 HOST_PATH = "reels/latest.mp4"
@@ -239,17 +239,9 @@ def main():
     caption = build_caption(stories)
     print("\n----- CAPTION -----\n" + caption + "\n-------------------\n")
 
-    # Approval gate
-    clear_reel_approval()  # clear any stale approval first
-    if not send_reel_approval_email(stories, caption, video_url):
-        print("❌ Could not send approval email. Skipping reel.")
-        return
-    if not wait_for_reel_approval():
-        print("❌ Reel not approved. Skipping.")
-        return
-    clear_reel_approval()  # consume it (single-use)
-
-    print("✅ Approved! Publishing reel...")
+    # Reel posts automatically (no approval step) to keep Pipedream usage low.
+    # Approval is still required for the photo posts (post_news.py).
+    print("📤 Auto-publishing reel (no approval step)...")
     post_reel(video_url, caption)
 
 
